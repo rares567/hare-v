@@ -111,6 +111,23 @@ package decode_package;
         shift_op_t shift_op;
     } fu_op_t;
 
+    //standard RISC-V machine trap causes, i.e. the exception code that the trap
+    //logic zero-extends into mcause (mcause[XLEN-1], the interrupt flag, is 0 for
+    //all of these as they are all synchronous exceptions)
+    typedef enum bit [3:0] {
+        INSTR_ADDR_MISALIGNED = 4'd0,
+        INSTR_ACCESS_FAULT    = 4'd1,
+        ILLEGAL_INSTR         = 4'd2,
+        BREAKPOINT            = 4'd3,
+        LOAD_ADDR_MISALIGNED  = 4'd4,
+        LOAD_ACCESS_FAULT     = 4'd5,
+        STORE_ADDR_MISALIGNED = 4'd6,
+        STORE_ACCESS_FAULT    = 4'd7,
+        ECALL_FROM_U          = 4'd8,
+        ECALL_FROM_S          = 4'd9,
+        ECALL_FROM_M          = 4'd11
+    } exception_cause_t;
+
     //main constrol signals for the entire CPU pipeline
     typedef struct packed {
         bit RegWrite;
@@ -120,7 +137,12 @@ package decode_package;
         bit Jump;
         fu_src_t FuSrc1;
         fu_src_t FuSrc2;
+        //FENCE changes no architectural state; it is a memory ordering barrier,
+        //not a trap, so it gets its own bit rather than raising an Exception
+        bit Fence;
         bit Exception;
+        //only meaningful while Exception is set
+        exception_cause_t ExcCause;
     } control_data_t;
 
     //instruction in a packet format with main fields
@@ -190,13 +212,18 @@ package decode_package;
             decoded_instr.Imm = this.decodeImmData(instr);
             decoded_instr.FunctionalUnitType = this.decodeFuType(instr.fields.Opcode[6:2],instr.fields.Funct3);
             decoded_instr.FunctionalUnitOp = this.decodeFuOp(instr.fields.Opcode[6:2],instr.fields.Funct3, instr.fields.Funct7);
-            decoded_instr.ControlData = this.decodeControlData(instr.fields.Opcode[6:2]);
+            decoded_instr.ControlData = this.decodeControlData(instr.fields.Opcode[6:2], instr.fields.Funct3, {instr.fields.Funct7, instr.fields.Rs2});
 
             return decoded_instr;
         endfunction
 
-       function control_data_t decodeControlData(bit [4:0] opcode);
+       //funct3 and funct12 are needed to tell the SYSTEM/MISC-MEM instructions apart:
+       //ECALL and EBREAK share an opcode and differ only in funct12, and FENCE vs
+       //FENCE.I differ only in funct3
+       function control_data_t decodeControlData(bit [4:0] opcode, bit [2:0] funct3, bit [11:0] funct12);
 
+            //ExcCause defaults to ILLEGAL_INSTR so that any opcode we never decode
+            //traps as an illegal instruction without needing to spell it out
             control_data_t control_signals = '{
                 RegWrite: 1'b0,
                 Load: 1'b0,
@@ -205,17 +232,27 @@ package decode_package;
                 Jump: 1'b0,
                 FuSrc1: ZERO,
                 FuSrc2: ZERO,
-                Exception: 1'b0
+                Fence: 1'b0,
+                Exception: 1'b0,
+                ExcCause: ILLEGAL_INSTR
             };
 
             unique case (opcode) inside
 
                 //Imm-Type
-                5'b01100: begin
+                5'b00100: begin
                     control_signals.RegWrite = 1'b1;
                     control_signals.FuSrc1 = REG;
                     control_signals.FuSrc2 = IMM;
                 end
+
+                //R-Type
+                5'b01100: begin
+                    control_signals.RegWrite = 1'b1;
+                    control_signals.FuSrc1 = REG;
+                    control_signals.FuSrc2 = REG;
+                end
+
                 //Load-Type
                 5'b00000: begin
                     control_signals.RegWrite = 1'b1;
@@ -268,6 +305,38 @@ package decode_package;
                     control_signals.FuSrc2 = IMM;
                 end
 
+                //MISC-MEM: FENCE orders memory accesses but touches no architectural
+                //state, so it retires as a barrier and must never trap - compilers emit
+                //it for __sync_synchronize and correct programs would break otherwise.
+                //Its fm/pred/succ/rs1/rd fields are reserved for finer-grain fences and
+                //the spec requires base implementations to ignore them, so we key on
+                //funct3 alone. FENCE.I (funct3=001) is Zifencei rather than RV32I, so it
+                //stays illegal until that extension is added.
+                5'b00011: begin
+                    if (funct3 == 3'b000)
+                        control_signals.Fence = 1'b1;
+                    else
+                        control_signals.Exception = 1'b1;
+                end
+
+                //SYSTEM: only ECALL and EBREAK are RV32I, and neither writes a register -
+                //all of their architectural effect is trap entry, handled at commit.
+                //Everything else sharing this opcode needs state we do not have yet:
+                //MRET (funct12=0x302) and SRET (0x102) are trap *returns* that read
+                //mepc/mstatus, and CSRR* (funct3!=0) is Zicsr. SRET is additionally
+                //illegal by definition while S-mode is unimplemented.
+                5'b11100: begin
+                    control_signals.Exception = 1'b1;
+                    if (funct3 == 3'b000) begin
+                        case (funct12)
+                            //this core is M-mode only, so ECALL always traps from M
+                            12'h000: control_signals.ExcCause = ECALL_FROM_M;
+                            12'h001: control_signals.ExcCause = BREAKPOINT;
+                            default: control_signals.ExcCause = ILLEGAL_INSTR;
+                        endcase
+                    end
+                end
+
                 //Exception raised - undefined opcode
                 default: control_signals.Exception = 1'b1;
             endcase
@@ -294,8 +363,10 @@ package decode_package;
 
                 //B-Type
                 8'b11000_???,
-                //J-Type
-                8'b11011_???: fu_type = BRANCH_JUMP_UNIT;
+                //J-Type Jal
+                8'b11011_???,
+                //J-Type Jalr
+                8'b11001_???: fu_type = BRANCH_JUMP_UNIT;
 
                 default: fu_type = INT_ALU_UNIT; //any other R/I-type instructions
             endcase
@@ -321,8 +392,8 @@ package decode_package;
                 9'b0?100_101_0: /*SRL(I)*/  execute_opcode.shift_op = SRL_OP;
                 9'b0?100_101_1: /*SRA(I)*/  execute_opcode.shift_op = SRA_OP;
                 9'b11000_???_?: /*BRANCH*/  execute_opcode.branch_jump_op = branch_jump_t'(funct3);
-                9'b01100_010_?: /*SLT(I)*/  execute_opcode.comp_op = SLT_OP;
-                9'b01100_011_?: /*SLTU(I)*/ execute_opcode.comp_op = SLTU_OP;
+                9'b0?100_010_?: /*SLT(I)*/  execute_opcode.comp_op = SLT_OP;
+                9'b0?100_011_?: /*SLTU(I)*/ execute_opcode.comp_op = SLTU_OP;
                 default: execute_opcode.alu_op = alu_op_t'('0);
             endcase
             return execute_opcode;
@@ -384,12 +455,14 @@ package decode_package;
             decoded_instr.Imm = this.decodeImmData(instr);
             decoded_instr.FunctionalUnitType = this.decodeFuType(instr.fields.Opcode[6:2],instr.fields.Funct3);
             decoded_instr.FunctionalUnitOp = this.decodeFuOp(instr.fields.Opcode[6:2],instr.fields.Funct3, instr.fields.Funct7);
-            decoded_instr.ControlData = this.decodeControlData(instr.fields.Opcode[6:2]);
+            decoded_instr.ControlData = this.decodeControlData(instr.fields.Opcode[6:2], instr.fields.Funct3, {instr.fields.Funct7, instr.fields.Rs2});
 
             return decoded_instr;
         endfunction
 
-        function control_data_t decodeControlData(bit [4:0] opcode);
+        //RV64 inherits the RV32 FENCE/ECALL/EBREAK handling as-is: the trap causes are
+        //XLEN-independent and RV64I adds no new SYSTEM or MISC-MEM instructions
+        function control_data_t decodeControlData(bit [4:0] opcode, bit [2:0] funct3, bit [11:0] funct12);
 
             control_data_t control_signals = '{
                 RegWrite: 1'b0,
@@ -399,10 +472,12 @@ package decode_package;
                 Jump: 1'b0,
                 FuSrc1: ZERO,
                 FuSrc2: ZERO,
-                Exception: 1'b0
+                Fence: 1'b0,
+                Exception: 1'b0,
+                ExcCause: ILLEGAL_INSTR
             };
             unique case (opcode) inside
-                default: control_signals = super.decodeControlData(opcode);
+                default: control_signals = super.decodeControlData(opcode, funct3, funct12);
             endcase
 
             return control_signals;

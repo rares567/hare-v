@@ -1,8 +1,8 @@
-`include "decode.svh";
+`include "decode.svh"
 `ifdef verilatorsim
 `include "verilog_xilinx.svh";
 `endif
-import decode_package::alu_op_t;
+import decode_package::*;
 
 //main ALU unit for Arithmetic/Logic operations like ADD, SUB, XOR, AND and OR based in Xilinx FPGA primitives
 //can be extended tu support some other operations from the B-extension like ORN, ANDN, XNOR
@@ -272,7 +272,7 @@ module xilinx_alu4b#(
               (~ALUMODE[3] & ~ALUMODE[2] &  ALUMODE[1]) ? A ^~B : A ^ B));  //SUB or ADD/XOR
   assign CO = CarryOuts[N-1];
  
-  generate 
+  generate
     if (FPGA_FAMILY == "ARTIX7")
         CARRY4 CARRY4_inst (
             .CO(CarryOuts),         // 4-bit carry out

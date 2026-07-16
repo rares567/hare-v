@@ -103,8 +103,15 @@ module register_bank_2r1w#(
     logic r_bypass1, r_bypass2, r_zero1, r_zero2;
     logic w_rs1_eq_commit, w_rs2_eq_commit;
 
-    assign w_rs1_eq_commit = (i_commit_addr == i_rs1_addr) & i_commit_en;
-    assign w_rs2_eq_commit = (i_commit_addr == i_rs2_addr) & i_commit_en;
+    //a register can have several producers in flight and only the newest one's commit
+    //makes it ready, so the bypass has to check the tag exactly like the release logic
+    //below does. Forwarding a superseded commit would hand out a value that is already
+    //stale and, because r_bypass also forces busy low at the output, would advertise the
+    //register as ready while it is still waiting on its real producer
+    assign w_rs1_eq_commit = (i_commit_addr == i_rs1_addr) & i_commit_en
+                             & (renamed_regs[i_rs1_addr] == i_commit_tag);
+    assign w_rs2_eq_commit = (i_commit_addr == i_rs2_addr) & i_commit_en
+                             & (renamed_regs[i_rs2_addr] == i_commit_tag);
 
     always_ff@(posedge clk) begin
         if (rst) begin
@@ -147,8 +154,11 @@ module register_bank_2r1w#(
             else begin
                 if(i_commit_en && renamed_regs[i_commit_addr] == i_commit_tag) //make sure we release reg if we get a commit on its latest tag
                     busy_list[i_commit_addr] <= 1'b0;
-                if(i_rd_we) //skip register x0
-                    busy_list[i_rd_tag] <= 1'b1;
+                //busy_list is indexed by architectural register, not by ROB tag - both
+                //happen to be 5 bits wide here, so confusing them compiles silently and
+                //marks some unrelated register busy while rd stays free
+                if(i_rd_we)
+                    busy_list[i_rd_addr] <= 1'b1;
             end
             //also update the rename tag for the current instruction
             if(i_rd_we) begin
