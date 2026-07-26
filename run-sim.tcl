@@ -112,6 +112,13 @@ if {[string match "vivado" $simulator]} {
         if {$len > 0} {
                 exec sh -c "xvlog --sv  [ glob -nocomplain ../../src/design/includes/*.svh ]" >@stdout
         }
+        # Some design modules (e.g. mwnr_multiport_mem) live under includes/ with a
+        # .sv extension; the *.svh glob above misses them, so compile them here too.
+        set files [glob -nocomplain ../../src/design/includes/*.sv]
+        set len [llength $files]
+        if {$len > 0} {
+                exec sh -c "xvlog --sv  [ glob -nocomplain ../../src/design/includes/*.sv ]" >@stdout
+        }
         set files [glob -nocomplain ../../src/design/*.v]
         set len [llength $files]
         if {$len > 0} {
@@ -128,8 +135,39 @@ if {[string match "vivado" $simulator]} {
                 exec sh -c "xvlog [ glob -nocomplain ../../src/sim/*.v ]" >@stdout
         }
 
+        # Recompile the SELECTED testbench last. Nearly every source `include's
+        # decode.svh, and since each xvlog file is its own compilation unit, the
+        # decode_package design unit gets re-emitted (overwritten) in `work` over
+        # and over. When a later file overwrites it, xvlog invalidates any earlier
+        # unit that hard-binds to it at compile time -- e.g. a tb that uses
+        # decode_package::ROB_DEPTH in a localparam or the rv32iDecoder class --
+        # and never rebuilds it, so elaboration reports "Cannot find design unit".
+        # Compiling $tb_top after all other sources pins its binding to the final
+        # decode_package definition, which nothing overwrites afterwards.
+        if {[file exists ../../src/sim/${tb_top}.sv]} {
+                exec sh -c "xvlog --sv ../../src/sim/${tb_top}.sv" >@stdout
+        } elseif {[file exists ../../src/sim/${tb_top}.v]} {
+                exec sh -c "xvlog ../../src/sim/${tb_top}.v" >@stdout
+        }
+
+        # Vivado's UNISIM primitives reference the glbl module for the global
+        # set/reset (GSR) net, so it must be compiled and elaborated alongside
+        # the testbench, otherwise elaboration fails with "'glbl' is not declared".
+        exec sh -c "xvlog $::env(XILINX_VIVADO)/data/verilog/src/glbl.v" >@stdout
+
         puts "\n###Elaborating provided top testbench module $tb_top###"
-        exec xelab -debug all -top $tb_top -snapshot tb_snapshot -timescale 1ns/1ps -override_timeunit -override_timeprecision >@stdout
+        # -L unisims_ver / -L secureip link Vivado's pre-compiled UNISIM simulation
+        # library so instantiated primitives (DSP48E2, DSP48E1, CARRY4, CARRY8,
+        # FDRE, ...) resolve during elaboration instead of "Module not found".
+        # $tb_top and glbl are both given as top units (glbl drives GSR).
+        #
+        # NOTE: do NOT pass -override_timeunit/-override_timeprecision here. glbl.v
+        # declares `timescale 1ps/1ps and releases the global GSR after
+        # ROC_WIDTH=100000 (=100ns); forcing every module to 1ns/1ps would stretch
+        # that pulse to 100us, holding every DSP/register in reset for the whole run
+        # (all outputs stuck at 0). -timescale only sets the default for modules
+        # that declare none, so glbl keeps its own units.
+        exec xelab -debug all -L unisims_ver -L secureip -snapshot tb_snapshot -timescale 1ns/1ps $tb_top glbl >@stdout
 
         puts "\n###Starting simulation###"
 

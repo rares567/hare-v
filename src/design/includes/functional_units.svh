@@ -166,8 +166,30 @@ module xilinx_alu_unit#(
 
 endmodule
 
-//implementation of ALU using DSP(s)
-//TODO
+//implementation of ALU using DSP(s) -- same behaviour as `xilinx_aluNb`, but the
+//add/sub/and/or/xor are computed inside DSP48E2 (ULTRASCALE) or DSP48E1 (ARTIX7)
+//slices instead of the fabric CARRY/LUT chain. Structure follows the addsub
+//wrapper at https://github.com/raresifrim/dsp-wrappers , extended to the logic ops.
+//
+// Operand routing (per 48-bit slice): the first operand A goes on the C port (the
+// ALU "Z" input) and the second operand B goes on the {A[29:0],B[17:0]}
+// concatenation (the ALU "X" input); the "Y" input is 0 (all-ones only for OR).
+// OPMODE/ALUMODE are decoded from `alu_op_t`:
+//
+//   op    ALUMODE  OPMODE        DSP ALU result (X=B on A:B, Z=A on C)
+//   ADD   0000     0_0011_0011   Z + X      = A + B
+//   SUB   0011     0_0011_0011   Z - X      = A - B
+//   XOR   0100     0_0011_0011   X ^ Z      = A ^ B
+//   AND   1100     0_0011_0011   X & Z      = A & B
+//   OR    1100     0_0111_1011   X | Z      = A | B   (only the Y mux differs vs AND)
+//
+// For DATA_WIDTH <= 48 a single DSP is used. Wider data is split into 48-bit
+// slices, one DSP each, cascaded LSB->MSB. add/sub let the carry ripple through
+// CARRYCASCOUT->CARRYCASCIN (each hop is registered by PREG, so a result settles
+// in ~NUM_DSP+1 cycles); logic ops ignore CARRYCASCIN inside the DSP so the same
+// wiring serves every op. As in the reference this is NOT fully pipelined for
+// NUM_DSP>1: hold the operands stable until the result is done, or add a matching
+// output register delay per slice if per-cycle throughput is required.
 module xilinx_dsp_alu#(
         parameter int DATA_WIDTH=32,
         parameter string FPGA_FAMILY = "ULTRASCALE" //ULTRSCALE/ARTIX7
@@ -181,7 +203,113 @@ module xilinx_dsp_alu#(
         output logic                  CARRYOUT
     );
 
+    localparam int DSP_W   = 48;
+    localparam int NUM_DSP = (DATA_WIDTH + DSP_W - 1) / DSP_W;
+    localparam int TOT_W   = NUM_DSP * DSP_W;
 
+    // ---- decode alu_op_t -> DSP OPMODE/ALUMODE (same for every slice) ----
+    logic [3:0] w_alumode;
+    logic [8:0] w_opmode;
+    always_comb begin
+        w_opmode = 9'b0_0011_0011;                       // Z=C, Y=0, X={A,B}
+        case (ALUMODE)
+            ADD_OP: w_alumode = 4'b0000;
+            SUB_OP: w_alumode = 4'b0011;
+            XOR_OP: w_alumode = 4'b0100;
+            AND_OP: w_alumode = 4'b1100;
+            OR_OP:  begin w_alumode = 4'b1100; w_opmode = 9'b0_0011_1011; end // Y=all-ones
+            default:w_alumode = 4'b0000;
+        endcase
+    end
+
+    // zero-extend the operands to a whole number of 48-bit slices
+    logic [TOT_W-1:0] A_ext, B_ext;
+    assign A_ext = TOT_W'(A);
+    assign B_ext = TOT_W'(B);
+
+    // carry chain between slices: CARRY[i] feeds slice i, CARRY[i+1] is produced by it
+    logic [NUM_DSP:0] CARRY;
+    assign CARRYOUT = CARRY[NUM_DSP];
+
+    generate
+        genvar i;
+        for (i = 0; i < NUM_DSP; i++) begin : g_slice
+
+            logic [47:0] Ci;   // first  operand -> C (Z)
+            logic [29:0] Ai;   // second operand -> A (X high)
+            logic [17:0] Bi;   // second operand -> B (X low)
+            assign Ci = A_ext[48*i +: 48];
+            assign Ai = B_ext[48*i + 47 : 48*i + 18];
+            assign Bi = B_ext[48*i + 17 : 48*i];
+
+            // first slice injects no carry; the rest take the cascade carry
+            logic [2:0] cis;
+            logic       ccin;
+            assign cis  = (i == 0) ? 3'b000 : 3'b010;
+            assign ccin = (i == 0) ? 1'b0   : CARRY[i];
+
+            logic        cascout;   // CARRYCASCOUT (used to chain interior slices)
+            logic [3:0]  cout;      // CARRYOUT     (top slice exposes the real carry out)
+            logic [47:0] p_slc;
+            assign CARRY[i+1] = (i == NUM_DSP-1) ? cout[3] : cascout;
+
+            if (FPGA_FAMILY == "ULTRASCALE") begin : g_e2
+                DSP48E2 #(
+                    .AMULTSEL("A"), .A_INPUT("DIRECT"), .BMULTSEL("B"), .B_INPUT("DIRECT"),
+                    .PREADDINSEL("A"), .RND(48'h000000000000),
+                    .USE_MULT("NONE"), .USE_SIMD("ONE48"),
+                    .USE_WIDEXOR("FALSE"), .XORSIMD("XOR24_48_96"),
+                    .AUTORESET_PATDET("NO_RESET"), .AUTORESET_PRIORITY("RESET"),
+                    .MASK(48'h3fffffffffff), .PATTERN(48'h000000000000),
+                    .SEL_MASK("MASK"), .SEL_PATTERN("PATTERN"), .USE_PATTERN_DETECT("NO_PATDET"),
+                    .ACASCREG(1), .ADREG(0), .ALUMODEREG(1), .AREG(1),
+                    .BCASCREG(1), .BREG(1), .CARRYINREG(0), .CARRYINSELREG(0),
+                    .CREG(1), .DREG(0), .INMODEREG(0), .MREG(0), .OPMODEREG(1), .PREG(1)
+                ) DSP48E2_inst (
+                    .ACOUT(), .BCOUT(), .CARRYCASCOUT(cascout), .MULTSIGNOUT(), .PCOUT(),
+                    .OVERFLOW(), .PATTERNBDETECT(), .PATTERNDETECT(), .UNDERFLOW(),
+                    .CARRYOUT(cout), .P(p_slc), .XOROUT(),
+                    .ACIN(30'b0), .BCIN(18'b0), .CARRYCASCIN(ccin), .MULTSIGNIN(1'b0), .PCIN(48'b0),
+                    .ALUMODE(w_alumode), .CARRYINSEL(cis), .CLK(clk), .INMODE(5'b0), .OPMODE(w_opmode),
+                    .A(Ai), .B(Bi), .C(Ci), .CARRYIN(1'b0), .D(27'b0),
+                    .CEA1(1'b0), .CEA2(1'b1), .CEAD(1'b0), .CEALUMODE(1'b1),
+                    .CEB1(1'b0), .CEB2(1'b1), .CEC(1'b1), .CECARRYIN(1'b0), .CECTRL(1'b1),
+                    .CED(1'b0), .CEINMODE(1'b0), .CEM(1'b0), .CEP(1'b1),
+                    .RSTA(rst), .RSTALLCARRYIN(1'b0), .RSTALUMODE(rst), .RSTB(rst), .RSTC(rst),
+                    .RSTCTRL(rst), .RSTD(1'b0), .RSTINMODE(1'b0), .RSTM(1'b0), .RSTP(rst)
+                );
+            end
+            else begin : g_e1
+                DSP48E1 #(
+                    .A_INPUT("DIRECT"), .B_INPUT("DIRECT"), .USE_DPORT("FALSE"),
+                    .USE_MULT("NONE"), .USE_SIMD("ONE48"),
+                    .AUTORESET_PATDET("NO_RESET"),
+                    .MASK(48'h3fffffffffff), .PATTERN(48'h000000000000),
+                    .SEL_MASK("MASK"), .SEL_PATTERN("PATTERN"), .USE_PATTERN_DETECT("NO_PATDET"),
+                    .ACASCREG(1), .ADREG(0), .ALUMODEREG(1), .AREG(1),
+                    .BCASCREG(1), .BREG(1), .CARRYINREG(0), .CARRYINSELREG(0),
+                    .CREG(1), .DREG(0), .INMODEREG(0), .MREG(0), .OPMODEREG(1), .PREG(1)
+                ) DSP48E1_inst (
+                    .ACOUT(), .BCOUT(), .CARRYCASCOUT(cascout), .MULTSIGNOUT(), .PCOUT(),
+                    .OVERFLOW(), .PATTERNBDETECT(), .PATTERNDETECT(), .UNDERFLOW(),
+                    .CARRYOUT(cout), .P(p_slc),
+                    .ACIN(30'b0), .BCIN(18'b0), .CARRYCASCIN(ccin), .MULTSIGNIN(1'b0), .PCIN(48'b0),
+                    .ALUMODE(w_alumode), .CARRYINSEL(cis), .CLK(clk), .INMODE(5'b0), .OPMODE(w_opmode[6:0]),
+                    .A(Ai), .B(Bi), .C(Ci), .CARRYIN(1'b0), .D(25'b0),
+                    .CEA1(1'b0), .CEA2(1'b1), .CEAD(1'b0), .CEALUMODE(1'b1),
+                    .CEB1(1'b0), .CEB2(1'b1), .CEC(1'b1), .CECARRYIN(1'b0), .CECTRL(1'b1),
+                    .CED(1'b0), .CEINMODE(1'b0), .CEM(1'b0), .CEP(1'b1),
+                    .RSTA(rst), .RSTALLCARRYIN(1'b0), .RSTALUMODE(rst), .RSTB(rst), .RSTC(rst),
+                    .RSTCTRL(rst), .RSTD(1'b0), .RSTINMODE(1'b0), .RSTM(1'b0), .RSTP(rst)
+                );
+            end
+
+            // wire out only the valid bits of this slice (top slice may be partial)
+            localparam int LO = 48*i;
+            localparam int WS = (DATA_WIDTH - LO) < DSP_W ? (DATA_WIDTH - LO) : DSP_W;
+            assign P[LO +: WS] = p_slc[WS-1:0];
+        end
+    endgenerate
 
 endmodule
 

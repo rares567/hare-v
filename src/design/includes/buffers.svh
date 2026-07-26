@@ -116,7 +116,10 @@ module sync_fifo #(
             wbin = wptr + 1'(i_wr_en & !o_full);
             wptr <= wbin;
             if (i_wr_en & !o_full)
-                fifo[wptr] <= i_data;
+                // address bits only; wptr[AW] is the wrap bit and would index
+                // past this DEPTH-entry array (harmless under Verilator, which
+                // masks power-of-two indices, but out of bounds under xsim).
+                fifo[wptr[AW-1:0]] <= i_data;
         end
     end
 
@@ -134,7 +137,7 @@ module sync_fifo #(
             logic [AW:0] rbin;
             rbin = rptr + 1'(i_rd_en & !o_empty);
             rptr <= rbin;
-            o_data <= fifo[rptr];
+            o_data <= fifo[rptr[AW-1:0]];  // address bits only (wptr[AW] is wrap)
         end
     end
 
@@ -313,7 +316,10 @@ module queue#(
             wbin = wptr + 1'(w_valid & !w_full);
             wptr <= wbin;
             if (w_valid & !w_full)
-                fifo[wptr] <= w_data;
+                // index with the address bits only; wptr's MSB is the wrap bit,
+                // so the full pointer (0..2*DEPTH-1) would run off this DEPTH-entry
+                // array. Must match the masked read index fifo[rbin[AW-1:0]].
+                fifo[wptr[AW-1:0]] <= w_data;
         end
     end
 

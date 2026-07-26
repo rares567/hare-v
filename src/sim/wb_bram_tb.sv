@@ -1,4 +1,9 @@
+`ifdef verilatorsim
 `include "../wishbone/wb_ram.sv"
+`else
+`include "../design/wishbone/wb_ram.sv"
+`endif
+
 `timescale 1ns / 1ps
 
 // Testbench for wb_bram (pipelined Wishbone BRAM slave).

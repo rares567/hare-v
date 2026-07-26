@@ -1,5 +1,11 @@
 `ifndef VERILOG_XILINX_SVH
 `define VERILOG_XILINX_SVH
+// Behavioural stand-ins for Xilinx primitives, intended ONLY for the Verilator
+// flow. Under Vivado (sim/synth/impl) the real UNISIM primitives must be used,
+// so the whole file collapses to nothing unless the `verilatorsim macro is set
+// -- that keeps DSP48E2/CARRY8/... from clashing with the UNISIM library even
+// when the build scripts glob this file directly into xvlog.
+`ifdef verilatorsim
 /* LIST OF XILINX PRIMITIVES USED FOR SIMULATION IN VERILATOR */
 //
 // FDRE primitive for Xilinx FPGAs
@@ -9,6 +15,7 @@
 //
 
 /* verilator coverage_off */
+
 module FDRE
 #(
     parameter [0:0] IS_C_INVERTED = 1'b0,
@@ -332,6 +339,13 @@ module DSP48E2
                               : (USE_SIMD == "TWO24" ) ? 48'hFFF_FFF_7FF_FFF
                               : (USE_SIMD == "ONE48" ) ? 48'hFFF_FFF_FFF_FFF
                               : 48'hFFF_FFF_FFF_FFF;
+
+
+    reg   [3:0] r_COUT_p4;
+    reg  [47:0] r_ALUOUT_p4;
+    reg   [7:0] r_XOROUT_p4;
+    reg         r_MULTSIGN_p4;
+    reg         r_ALUMODE10_p4;
     
     // ============================== CLOCK and RESETs ==============================
 
@@ -362,6 +376,7 @@ module DSP48E2
     end
     
     wire [3:0] w_ALUMODE_mux = (ALUMODEREG[0]) ? r_ALUMODE_p1 : w_ALUMODE_p0;
+    wire        w_ALUMODE10_p3 = &w_ALUMODE_mux[1:0];
     
     // ============================== INMODE input ==============================
     
@@ -746,13 +761,6 @@ module DSP48E2
     wire  [7:0] w_XOROUT_p3    = (USE_WIDEXOR != "TRUE") ? 8'b0
                                : (XORSIMD == "XOR12") ? w_XORA : w_XORB;
     wire        w_MULTSIGN_p3  = w_sum3[13];
-    wire        w_ALUMODE10_p3 = &w_ALUMODE_mux[1:0];
-
-    reg   [3:0] r_COUT_p4;
-    reg  [47:0] r_ALUOUT_p4;
-    reg   [7:0] r_XOROUT_p4;
-    reg         r_MULTSIGN_p4;
-    reg         r_ALUMODE10_p4;
     
     always @(posedge w_CLK) begin : ALU_REG
 
@@ -831,4 +839,5 @@ module DSP48E2
 endmodule
 /* verilator coverage_on */
 
+`endif // guarded by verilatorsim
 `endif // VERILOG_XILINX_SVH

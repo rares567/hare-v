@@ -1,3 +1,4 @@
+/*
 `include "decode.svh"
 import decode_package::*;
 
@@ -54,3 +55,4 @@ module instr_dispatch_stage();
 
 
 endmodule
+*/
