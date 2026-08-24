@@ -182,3 +182,57 @@ module register_bank_2r1w #(
   assign o_rs2_tag  = r_rs2_rename;
 
 endmodule
+
+// 2R1W register file with asynchronous dual-read and synchronous single-write.
+// Hardwires register 0 to 0 and provides internal write-to-read forwarding.
+module register_bank_inorder #(
+    parameter type DATA_T   = bit [31:0],
+    parameter int  NUM_REGS = 32
+) (
+    input  logic                         clk,
+    (*direct_reset="true"*) input logic  rst,
+
+    // Write Port
+    input  logic                         i_we,
+    input  logic  [$clog2(NUM_REGS)-1:0] i_waddr,
+    input  DATA_T                        i_wdata,
+
+    // Read Ports
+    input  logic  [$clog2(NUM_REGS)-1:0] i_raddr1,
+    input  logic  [$clog2(NUM_REGS)-1:0] i_raddr2,
+    output DATA_T                        o_rdata1,
+    output DATA_T                        o_rdata2
+);
+
+  (* ram_style = "distributed" *) DATA_T regs[NUM_REGS];
+
+  // Synchronous write (reg 0 is read-only)
+  always_ff @(posedge clk) begin
+    if (rst) begin
+      regs <= '{NUM_REGS{'0}};
+    end else if (i_we && (i_waddr != '0)) begin
+      regs[i_waddr] <= i_wdata;
+    end
+  end
+
+  // Combinational read with reg 0 hardwired to zero and internal write forwarding
+  always_comb begin
+    if (i_raddr1 == '0) begin
+      o_rdata1 = '0;
+    end else if (i_we && (i_waddr == i_raddr1)) begin
+      o_rdata1 = i_wdata;
+    end else begin
+      o_rdata1 = regs[i_raddr1];
+    end
+
+    if (i_raddr2 == '0) begin
+      o_rdata2 = '0;
+    end else if (i_we && (i_waddr == i_raddr2)) begin
+      o_rdata2 = i_wdata;
+    end else begin
+      o_rdata2 = regs[i_raddr2];
+    end
+  end
+
+endmodule
+
