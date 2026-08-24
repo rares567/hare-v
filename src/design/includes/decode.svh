@@ -1,9 +1,12 @@
+`ifndef DECODE_SVH
+`define DECODE_SVH
+
 package decode_package;
 
     //length of supported instructions; does not support compressed instructions for now
-    parameter int ILEN = 32;
+    localparam int ILEN = 32;
     // define the ROB DEPTH at the package level as this is needed to define the tag width
-    parameter int ROB_DEPTH = 32;
+    localparam int ROB_DEPTH = 32;
 
     //instruction as bit vector
     typedef bit [ILEN-1:0] bit_instruction_t;
@@ -510,3 +513,5 @@ package decode_package;
     endclass
 
 endpackage
+
+`endif // DECODE_SVH
