@@ -217,6 +217,17 @@ package decode_package;
             decoded_instr.FunctionalUnitOp = this.decodeFuOp(instr.fields.Opcode[6:2],instr.fields.Funct3, instr.fields.Funct7);
             decoded_instr.ControlData = this.decodeControlData(instr.fields.Opcode[6:2], instr.fields.Funct3, {instr.fields.Funct7, instr.fields.Rs2});
 
+            // RV32I base requirement: Opcode[1:0] == 2'b11
+            if (instr.fields.Opcode[1:0] != 2'b11) begin
+                decoded_instr.ControlData.Exception = 1'b1;
+                decoded_instr.ControlData.ExcCause  = ILLEGAL_INSTR;
+                decoded_instr.ControlData.RegWrite  = 1'b0;
+                decoded_instr.ControlData.Load      = 1'b0;
+                decoded_instr.ControlData.Store     = 1'b0;
+                decoded_instr.ControlData.Branch    = 1'b0;
+                decoded_instr.ControlData.Jump      = 1'b0;
+            end
+
             return decoded_instr;
         endfunction
 
@@ -459,6 +470,17 @@ package decode_package;
             decoded_instr.FunctionalUnitType = this.decodeFuType(instr.fields.Opcode[6:2],instr.fields.Funct3);
             decoded_instr.FunctionalUnitOp = this.decodeFuOp(instr.fields.Opcode[6:2],instr.fields.Funct3, instr.fields.Funct7);
             decoded_instr.ControlData = this.decodeControlData(instr.fields.Opcode[6:2], instr.fields.Funct3, {instr.fields.Funct7, instr.fields.Rs2});
+
+            // RV64I base requirement: Opcode[1:0] == 2'b11
+            if (instr.fields.Opcode[1:0] != 2'b11) begin
+                decoded_instr.ControlData.Exception = 1'b1;
+                decoded_instr.ControlData.ExcCause  = ILLEGAL_INSTR;
+                decoded_instr.ControlData.RegWrite  = 1'b0;
+                decoded_instr.ControlData.Load      = 1'b0;
+                decoded_instr.ControlData.Store     = 1'b0;
+                decoded_instr.ControlData.Branch    = 1'b0;
+                decoded_instr.ControlData.Jump      = 1'b0;
+            end
 
             return decoded_instr;
         endfunction
