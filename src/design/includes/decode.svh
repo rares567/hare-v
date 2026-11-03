@@ -9,12 +9,12 @@ package decode_package;
     localparam int ROB_DEPTH = 32;
 
     //instruction as bit vector
-    typedef bit [ILEN-1:0] bit_instruction_t;
-    typedef bit [31:0] rv32_data_t;
-    typedef bit [63:0] rv64_data_t;
+    typedef logic [ILEN-1:0] bit_instruction_t;
+    typedef logic [31:0] rv32_data_t;
+    typedef logic [63:0] rv64_data_t;
 
     //compressed opcode for the Execute stage
-    typedef enum bit[3:0]{
+    typedef enum logic [3:0] {
         //I-base extension operations
         ADD_OP  = 4'b0000,
         SUB_OP  = 4'b0011,
@@ -23,7 +23,7 @@ package decode_package;
         XOR_OP  = 4'b0100
     } alu_op_t;
 
-    typedef enum bit[3:0] {
+    typedef enum logic [3:0] {
         MUL_OP    = 4'b0000,
         MULH_OP   = 4'b0001,
         MULHSU_OP = 4'b0011,
@@ -38,7 +38,7 @@ package decode_package;
         REMUW_OP  = 4'b1111
     } mul_div_op_t;
 
-    typedef enum bit [2:0]{
+    typedef enum logic [2:0] {
         SRL_OP   = 3'b000,
         SLL_OP   = 3'b001,
         SRA_OP   = 3'b010,
@@ -48,7 +48,7 @@ package decode_package;
 
     //match branch codes
     //R-type SLT and SLTU needs to be left-shifted by one
-    typedef enum bit [2:0] {
+    typedef enum logic [2:0] {
         SEQ_OP = 3'b000,
         SNE_OP = 3'b001,
         SLT_OP = 3'b100,
@@ -57,7 +57,7 @@ package decode_package;
         SGEU_OP = 3'b111
     } comp_op_t;
 
-    typedef enum bit[2:0]{
+    typedef enum logic [2:0] {
         REG,
         IMM,
         CONST, //will be 4 for RV32 and 8 for RV8
@@ -65,7 +65,7 @@ package decode_package;
         PC
     } fu_src_t;
 
-    typedef enum bit [2:0]{
+    typedef enum logic [2:0] {
         INT_ALU_UNIT,
         BRANCH_JUMP_UNIT,
         COMPARATOR_UNIT,
@@ -74,14 +74,14 @@ package decode_package;
         MUL_DIV_UNIT
     } functional_unit_t;
 
-    typedef enum bit [1:0] {
+    typedef enum logic [1:0] {
         NONE = 2'b00,
         EQ   = 2'b01, //EQUAL
         LT   = 2'b10, //LESS THAN
         GT   = 2'b11  //GREATER THAN
     } magnitude_comp_t;
 
-    typedef enum bit [2:0] {
+    typedef enum logic [2:0] {
         BEQ_OP = 3'b000,
         BNE_OP = 3'b001,
         BLT_OP = 3'b100,
@@ -92,7 +92,7 @@ package decode_package;
         JALR_OP = 3'b011
     } branch_jump_t;
 
-    typedef enum bit [3:0] {
+    typedef enum logic [3:0] {
         LB_OP = 4'b0000,
         LH_OP = 4'b0001,
         LW_OP = 4'b0010,
@@ -117,7 +117,7 @@ package decode_package;
     //standard RISC-V machine trap causes, i.e. the exception code that the trap
     //logic zero-extends into mcause (mcause[XLEN-1], the interrupt flag, is 0 for
     //all of these as they are all synchronous exceptions)
-    typedef enum bit [3:0] {
+    typedef enum logic [3:0] {
         INSTR_ADDR_MISALIGNED = 4'd0,
         INSTR_ACCESS_FAULT    = 4'd1,
         ILLEGAL_INSTR         = 4'd2,
@@ -133,29 +133,29 @@ package decode_package;
 
     //main constrol signals for the entire CPU pipeline
     typedef struct packed {
-        bit RegWrite;
-        bit Load;
-        bit Store;
-        bit Branch;
-        bit Jump;
+        logic RegWrite;
+        logic Load;
+        logic Store;
+        logic Branch;
+        logic Jump;
         fu_src_t FuSrc1;
         fu_src_t FuSrc2;
         //FENCE changes no architectural state; it is a memory ordering barrier,
         //not a trap, so it gets its own bit rather than raising an Exception
-        bit Fence;
-        bit Exception;
+        logic Fence;
+        logic Exception;
         //only meaningful while Exception is set
         exception_cause_t ExcCause;
     } control_data_t;
 
     //instruction in a packet format with main fields
     typedef struct packed {
-        bit [6:0] Funct7;
-        bit [4:0] Rs2;
-        bit [4:0] Rs1;
-        bit [2:0] Funct3;
-        bit [4:0] Rd;
-        bit [6:0] Opcode;
+        logic [6:0] Funct7;
+        logic [4:0] Rs2;
+        logic [4:0] Rs1;
+        logic [2:0] Funct3;
+        logic [4:0] Rd;
+        logic [6:0] Opcode;
     } packed_instruction_t;
 
     typedef union packed {
@@ -177,9 +177,9 @@ package decode_package;
 
     //unpacked decoded instruction for RV32
     typedef struct {
-        bit [4:0] Rs2;
-        bit [4:0] Rs1;
-        bit [4:0] Rd;
+        logic [4:0] Rs2;
+        logic [4:0] Rs1;
+        logic [4:0] Rd;
         rv32_data_t Imm;
         rv32_data_t Pc;
         functional_unit_t FunctionalUnitType;
@@ -189,9 +189,9 @@ package decode_package;
 
     //unpacked decoded instruction for RV64
     typedef struct {
-        bit [4:0] Rs2;
-        bit [4:0] Rs1;
-        bit [4:0] Rd;
+        logic [4:0] Rs2;
+        logic [4:0] Rs1;
+        logic [4:0] Rd;
         rv64_data_t Imm;
         rv64_data_t Pc;
         functional_unit_t FunctionalUnitType;
@@ -234,7 +234,7 @@ package decode_package;
        //funct3 and funct12 are needed to tell the SYSTEM/MISC-MEM instructions apart:
        //ECALL and EBREAK share an opcode and differ only in funct12, and FENCE vs
        //FENCE.I differ only in funct3
-       function control_data_t decodeControlData(bit [4:0] opcode, bit [2:0] funct3, bit [11:0] funct12);
+       function control_data_t decodeControlData(logic [4:0] opcode, logic [2:0] funct3, logic [11:0] funct12);
 
             //ExcCause defaults to ILLEGAL_INSTR so that any opcode we never decode
             //traps as an illegal instruction without needing to spell it out
@@ -358,7 +358,7 @@ package decode_package;
             return control_signals;
         endfunction
 
-        function functional_unit_t decodeFuType(bit [4:0] opcode, bit [2:0] funct3);
+        function functional_unit_t decodeFuType(logic [4:0] opcode, logic [2:0] funct3);
 
             functional_unit_t fu_type = INT_ALU_UNIT;
             unique case ({opcode, funct3}) inside
@@ -388,7 +388,7 @@ package decode_package;
             return fu_type;
         endfunction
 
-        function fu_op_t decodeFuOp(bit [4:0] opcode, bit[2:0] funct3, bit[6:0] funct7);
+        function fu_op_t decodeFuOp(logic [4:0] opcode, logic [2:0] funct3, logic [6:0] funct7);
             fu_op_t execute_opcode;
             unique case({opcode, funct3,funct7[5]}) inside
                 9'b00000_???_?: /*LOAD*/    execute_opcode.load_store_op = load_store_t'({1'b0, funct3});
@@ -416,7 +416,7 @@ package decode_package;
         function rv32_data_t decodeImmData(instruction_t instruction);
 
             rv32_data_t imm_data = '0;
-            bit sign_bit = instruction.raw[ILEN-1];
+            logic sign_bit = instruction.raw[ILEN-1];
 
             unique case (instruction.fields.Opcode[6:2]) inside
 
@@ -487,7 +487,7 @@ package decode_package;
 
         //RV64 inherits the RV32 FENCE/ECALL/EBREAK handling as-is: the trap causes are
         //XLEN-independent and RV64I adds no new SYSTEM or MISC-MEM instructions
-        function control_data_t decodeControlData(bit [4:0] opcode, bit [2:0] funct3, bit [11:0] funct12);
+        function control_data_t decodeControlData(logic [4:0] opcode, logic [2:0] funct3, logic [11:0] funct12);
 
             control_data_t control_signals = '{
                 RegWrite: 1'b0,
@@ -508,7 +508,7 @@ package decode_package;
             return control_signals;
         endfunction
 
-        function functional_unit_t decodeFuType(bit [4:0] opcode, bit [2:0] funct3);
+        function functional_unit_t decodeFuType(logic [4:0] opcode, logic [2:0] funct3);
             functional_unit_t fu_type = INT_ALU_UNIT;
             unique case ({opcode, funct3}) inside
                 default: fu_type = super.decodeFuType(opcode, funct3);
@@ -516,7 +516,7 @@ package decode_package;
             return fu_type;
         endfunction
 
-        function fu_op_t decodeFuOp(bit [4:0] opcode, bit[2:0] funct3, bit[6:0] funct7);
+        function fu_op_t decodeFuOp(logic [4:0] opcode, logic [2:0] funct3, logic [6:0] funct7);
             fu_op_t execute_opcode;
             unique case({opcode, funct3, funct7[5]}) inside
                 default: execute_opcode = super.decodeFuOp(opcode, funct3, funct7);
