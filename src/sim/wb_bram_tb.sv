@@ -1,7 +1,7 @@
 `ifdef verilatorsim
 `include "../wishbone/wb_ram.sv"
 `else
-`include "../design/wishbone/wb_ram.sv"
+`include "../design/includes/interfaces.svh"
 `endif
 
 `timescale 1ns / 1ps

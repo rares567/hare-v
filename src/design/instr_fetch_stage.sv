@@ -1,13 +1,14 @@
-/*
-`ifdef verilatorsim
-`include "interfaces.svh"
-`include "decode.svh"
-`else
+`ifndef verilatorsim
 `include "includes/interfaces.svh"
 `include "includes/decode.svh"
+`else
+`include "interfaces.svh"
+`include "decode.svh"
 `endif
+
 import decode_package::*;
 
+/*
 module program_counter #(
     parameter type DATA_T = decode_package::rv32_data_t,
     parameter DATA_T START_ADDRESS = 0
@@ -111,7 +112,7 @@ module instruction_fetch_controller #(
 
 endmodule
 
-module instr_fetch_stage #(
+module instr_fetch_stage_decoupled #(
     parameter type DATA_T = decode_package::rv32_data_t,
     parameter int ADDR_WIDTH = 12,
     parameter DATA_T START_ADDRESS = 0
@@ -189,3 +190,68 @@ module instr_fetch_stage #(
 
 endmodule
 */
+
+// Instruction fetch (IF) stage for in-order RV32I core.
+// Addresses 1-cycle BRAM with pc_next so instruction data and PC arrive synchronously at IF/ID.
+module instr_fetch_stage #(
+    parameter type DATA_T = rv32_data_t,
+    parameter DATA_T START_ADDRESS = 32'h8000_0000
+) (
+    input  logic   clk,
+    (*direct_reset="true"*) input logic rst,
+
+    // Hazard stall input from hazard_unit
+    input  logic   i_stall_if,
+
+    // Branch / jump redirect from EX stage
+    input  logic   i_branch_taken,
+    input  DATA_T  i_branch_target,
+
+    // Wishbone master interface to 1-cycle instruction BRAM (expects 32-bit address)
+    wishboneIf.Master wb_imem,
+
+    // Outputs to IF/ID pipeline register
+    output instruction_t o_if_instr,
+    output DATA_T        o_if_pc,
+    output logic         o_if_valid
+);
+
+  DATA_T pc_r;
+  DATA_T pc_next;
+
+  // Next PC multiplexer
+  always_comb begin
+    if (rst) begin
+      pc_next = START_ADDRESS;
+    end else if (i_branch_taken) begin
+      pc_next = i_branch_target;
+    end else if (i_stall_if || !wb_imem.ack) begin
+      pc_next = pc_r;
+    end else begin
+      pc_next = pc_r + DATA_T'(4);
+    end
+  end
+
+  // PC register
+  always_ff @(posedge clk) begin
+    if (rst) begin
+      pc_r <= START_ADDRESS;
+    end else begin
+      pc_r <= pc_next;
+    end
+  end
+
+  // Wishbone request
+  assign wb_imem.addr = pc_next;
+  assign wb_imem.cyc  = !rst;
+  assign wb_imem.stb  = !rst;
+  assign wb_imem.we   = 1'b0;
+  assign wb_imem.sel     = 4'b1111;
+  assign wb_imem.data_wr = '0;
+
+  // Stage outputs
+  assign o_if_instr.raw = wb_imem.data_rd;
+  assign o_if_pc        = pc_r;
+  assign o_if_valid     = wb_imem.ack;
+
+endmodule

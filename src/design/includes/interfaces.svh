@@ -1,3 +1,6 @@
+`ifndef INTERFACES_SVH
+`define INTERFACES_SVH
+
 //Wishbone interface used between CPU and Memories/Periperals
 interface wishboneIf #(
         parameter type DATA_T = bit[31:0],
@@ -49,42 +52,56 @@ interface wishboneIf #(
         input err
     );
 
-    task automatic MasterWrite (input logic[ADDR_WIDTH-1:0] waddr, input DATA_T wdata);
-        if(stall)
+    task automatic MasterWrite (
+        input logic [ADDR_WIDTH-1:0]   waddr,
+        input DATA_T                   wdata,
+        input logic [SELECT_WIDTH-1:0] wsel = '1
+    );
+        if (stall)
             $display("Downstream module is busy, waiting for it to become ready before sending write request");
-        @(posedge clk iff stall == '0)
-        addr = waddr;
+        @(posedge clk iff stall == '0);
+        addr    = waddr;
         data_wr = wdata;
-        we  = '1;
-        sel = '1;
-        stb = '1;
-        cyc = '1;
+        we      = '1;
+        sel     = wsel;
+        stb     = '1;
+        cyc     = '1;
         @(posedge clk);
         we  = '0;
         stb = '0;
-        if (~ack)
-            wait(ack == 1'b1);
+        if (~ack && ~err)
+            wait(ack == 1'b1 || err == 1'b1);
         cyc = '0;
-        $display("Received ack on write request @address %h with data %h", waddr, wdata);
+        if (err)
+            $display("Received err on write request @address %h", waddr);
+        else
+            $display("Received ack on write request @address %h with data %h", waddr, wdata);
     endtask
 
-    task automatic MasterRead (input logic[ADDR_WIDTH-1:0] raddr,output DATA_T rdata);
-        if(stall)
-            $display("Downstream module is busy, waiting for it to become ready before sending write request");
-        @(posedge clk iff stall == '0)
-        addr = raddr;
+    task automatic MasterRead (
+        input  logic [ADDR_WIDTH-1:0]   raddr,
+        output DATA_T                   rdata,
+        input  logic [SELECT_WIDTH-1:0] rsel = '1
+    );
+        if (stall)
+            $display("Downstream module is busy, waiting for it to become ready before sending read request");
+        @(posedge clk iff stall == '0);
+        addr    = raddr;
         data_wr = '0;
-        we  = '0;
-        sel = '1;
-        stb = '1;
-        cyc = '1;
+        we      = '0;
+        sel     = rsel;
+        stb     = '1;
+        cyc     = '1;
         @(posedge clk);
         stb = '0;
-        if (~ack)
-            wait(ack == 1'b1);
-        cyc = '0;
+        if (~ack && ~err)
+            wait(ack == 1'b1 || err == 1'b1);
         rdata = data_rd;
-        $display("Received ack on read request @address %h with data %h", raddr, rdata);
+        cyc = '0;
+        if (err)
+            $display("Received err on read request @address %h", raddr);
+        else
+            $display("Received ack on read request @address %h with data %h", raddr, rdata);
     endtask
 
 endinterface //interfacename
@@ -142,3 +159,5 @@ interface handshakeIf #(
     endtask
 
 endinterface
+
+`endif // INTERFACES_SVH

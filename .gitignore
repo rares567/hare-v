@@ -2,3 +2,11 @@
 .claude
 dvt_build.log
 build
+*.vcd
+*.jou
+*.log
+*.pb
+*.wdb
+.Xil/
+xsim.dir/
+dfx_runtime.txt
